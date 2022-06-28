@@ -1,0 +1,57 @@
+package com.wiremock.service;
+
+
+import com.wiremock.dto.*;
+import com.wiremock.gateway.PaymentProcessorGateway;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Service
+public class TicketBookingService {
+    private final PaymentProcessorGateway paymentProcessorGateway;
+
+    public TicketBookingService(PaymentProcessorGateway paymentProcessorGateway) {
+        this.paymentProcessorGateway = paymentProcessorGateway;
+    }
+
+    public TicketBookingResponse payForBooking(final TicketBookingPaymentRequest bookingPayment) {
+
+
+        final CardDetails cardDetails = bookingPayment.getCardDetails();
+
+        if (bookingPayment.isFraudAlert()) {
+            final FraudCheckResponse fraudCheckResponse = paymentProcessorGateway.fraudCheck(cardDetails.getNumber());
+            if (fraudCheckResponse.isBlacklisted()) {
+                return new TicketBookingResponse(bookingPayment.getBookingId(), null, TicketBookingResponse.BookingResponseStatus.REJECTED);
+            }
+        }
+        final PaymentProcessorResponse paymentProcessorResponse = paymentProcessorGateway.makePayment(cardDetails.getNumber(), cardDetails.getExpiry(), bookingPayment.getAmount());
+
+        if (paymentProcessorResponse.getPaymentResponseStatus() == PaymentProcessorResponse.PaymentResponseStatus.SUCCESS) {
+            return new TicketBookingResponse(bookingPayment.getBookingId(), paymentProcessorResponse.getPaymentId(), TicketBookingResponse.BookingResponseStatus.SUCCESS);
+        } else {
+            return new TicketBookingResponse(bookingPayment.getBookingId(), paymentProcessorResponse.getPaymentId(), TicketBookingResponse.BookingResponseStatus.REJECTED);
+        }
+    }
+
+    public PaymentUpdateResponse updatePaymentDetails(final TicketBookingPaymentRequest bookingPayment) {
+        PaymentUpdateResponse paymentUpdateResponse = new PaymentUpdateResponse();
+        try {
+            paymentProcessorGateway.updatePayment(bookingPayment.getBookingId());
+            paymentUpdateResponse.setStatus("SUCCESS");
+        }catch (Exception e){
+            paymentUpdateResponse.setStatus("REJECTED");
+        }
+
+        return paymentUpdateResponse;
+    }
+
+    public List<TicketBookingResponse> batchPayment(final List<TicketBookingPaymentRequest> bookingPayment) {
+        return bookingPayment
+                .stream()
+                .map(this::payForBooking)
+                .collect(Collectors.toList());
+    }
+}
